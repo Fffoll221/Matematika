@@ -1,11 +1,13 @@
 {
   "name": "witesite-server",
+  "private": true,
   "type": "module",
   "main": "index.js",
   "scripts": {
     "dev": "nodemon index.js",
     "start": "node index.js"
   },
+  "engines": { "node": ">=18" },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
