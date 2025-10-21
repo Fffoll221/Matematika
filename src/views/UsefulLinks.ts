@@ -62,17 +62,6 @@ export default function UsefulLinks() {
         <span class="ml-auto text-sm muted">Переглянути</span>
       </a>
 
-      <!-- Головні ресурси НМТ (можна розширювати) -->
-      <a class="card flex items-center gap-3 hover:shadow-[0_10px_30px_rgba(0,0,0,0.08)] transition group"
-         href="https://testportal.gov.ua/" target="_blank" rel="noopener">
-        <div class="rounded-xl bg-beige-200 p-3 text-brown-700 group-hover:bg-beige-300">${icons.link}</div>
-        <div>
-          <div class="font-semibold">УЦОЯО</div>
-          <div class="muted text-sm">Офіційний сайт Українського центру оцінювання якості освіти</div>
-        </div>
-        <span class="ml-auto text-sm muted">На сайт</span>
-      </a>
-    </div>
 
     <!-- Mini-tips -->
     <div class="mt-8 grid md:grid-cols-3 gap-4">

@@ -1,9 +1,8 @@
 const nav = [
   { href: "#/",              label: "ГОЛОВНА" },
   { href: "#/zno-nmt",       label: "ЗНО та НМТ" },
-  
+  { href: "#/models",        label: "МАТЕМАТИЧНІ МОДЕЛІ" },
   { href: "#/lifehacks",     label: "ЛАЙФХАКИ" },
-  
   { href: "#/about-course",  label: "ПРО КУРС" },
   { href: "#/links",         label: "КОРИСНІ ПОСИЛАННЯ" },
   { href: "#/about-me",      label: "ПРО МЕНЕ" },

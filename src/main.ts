@@ -1,3 +1,4 @@
+// src/main.ts
 import "./styles.css";
 import { Router } from "./router";
 
@@ -24,6 +25,7 @@ import Tests from "./views/Tests";
 import AboutCourse from "./views/AboutCourse";
 import UsefulLinks from "./views/UsefulLinks";
 import AboutMe from "./views/AboutMe";
+import Models from "./views/Models";
 
 import { mountFooter } from "./footer";
 import Privacy from "./views/Privacy";
@@ -36,6 +38,7 @@ window.addEventListener("error", (e) =>
 const app = document.getElementById("app")!;
 const router = new Router(app);
 
+// ====== ROUTES ======
 router.register({ path: "/", view: Landing });
 router.register({ path: "/login", view: Login });
 router.register({ path: "/register", view: Register });
@@ -47,6 +50,7 @@ router.register({ path: "/tests", view: Tests });
 router.register({ path: "/about-course", view: AboutCourse });
 router.register({ path: "/links", view: UsefulLinks });
 router.register({ path: "/about-me", view: AboutMe });
+router.register({ path: "/models", view: Models });
 
 router.register({ path: "/privacy", view: Privacy });
 router.register({ path: "/terms", view: Terms });
@@ -71,17 +75,57 @@ router.register({
 router.navigate();
 mountFooter();
 
+// ====== API CONFIG / OFFLINE MODE ======
+// серверний базовий URL (працює лише у dev)
 const API_BASE = location.hostname === "localhost" ? "http://localhost:5174" : "";
+// вмикає звернення до бекенда тільки якщо ?api=1 або localStorage.use_api === "1"
+const urlParams = new URLSearchParams(location.search);
+const USE_API = (urlParams.get("api") === "1") || (localStorage.getItem("use_api") === "1");
 
-const jget = async <T>(url: string, fallback: T): Promise<T> => {
-  try { const r = await fetch(API_BASE + url, { credentials: "include" }); if (!r.ok) throw 0; return await r.json(); }
-  catch { return fallback; }
+// Перетворення шляху у повний URL (для data:, http(s) нічого не чіпаємо)
+const absUrl = (u: string) => {
+  if (!u) return u;
+  const low = u.toLowerCase();
+  if (low.startsWith("http://") || low.startsWith("https://") || low.startsWith("data:")) return u;
+  return API_BASE ? API_BASE + u : u;
 };
-const jput   = async (url: string, body: any) => { try { await fetch(API_BASE + url, { method: "PUT",   headers: { "Content-Type":"application/json" }, body: JSON.stringify(body) }); } catch {} };
-const jpost  = async (url: string, body: any) => { try { await fetch(API_BASE + url, { method: "POST",  headers: { "Content-Type":"application/json" }, body: JSON.stringify(body) }); } catch {} };
-const jpatch = async (url: string, body: any) => { try { await fetch(API_BASE + url, { method: "PATCH", headers: { "Content-Type":"application/json" }, body: JSON.stringify(body) }); } catch {} };
-const jdel   = async (url: string) => { try { await fetch(API_BASE + url, { method: "DELETE" }); } catch {} };
 
+// ====== SEPARATE SESSION KEYS ======
+const USER_EMAIL_KEY = "user_email";
+const USER_ID_KEY    = "user_id";
+
+const ADMIN_EMAIL_KEY  = "admin_email";
+const ADMIN_TOKEN_KEY  = "admin_token";
+
+// ====== HELPERS: network wrappers (тихі у офлайн-режимі) ======
+const jget = async <T>(url: string, fallback: T): Promise<T> => {
+  if (!USE_API || !API_BASE) return fallback;
+  try {
+    const r = await fetch(API_BASE + url, { credentials: "include" });
+    if (!r.ok) throw 0;
+    return await r.json();
+  } catch {
+    return fallback;
+  }
+};
+const jput   = async (url: string, body: any) => {
+  if (!USE_API || !API_BASE) return;
+  try { await fetch(API_BASE + url, { method: "PUT",   headers: { "Content-Type":"application/json" }, body: JSON.stringify(body) }); } catch {}
+};
+const jpost  = async (url: string, body: any) => {
+  if (!USE_API || !API_BASE) return;
+  try { await fetch(API_BASE + url, { method: "POST",  headers: { "Content-Type":"application/json" }, body: JSON.stringify(body) }); } catch {}
+};
+const jpatch = async (url: string, body: any) => {
+  if (!USE_API || !API_BASE) return;
+  try { await fetch(API_BASE + url, { method: "PATCH", headers: { "Content-Type":"application/json" }, body: JSON.stringify(body) }); } catch {}
+};
+const jdel   = async (url: string) => {
+  if (!USE_API || !API_BASE) return;
+  try { await fetch(API_BASE + url, { method: "DELETE" }); } catch {}
+};
+
+// ====== DATA KEYS & TYPES ======
 type Course = { id: string; title: string; price: number; short: string };
 
 const DEFAULT_CATALOG: Course[] = [
@@ -95,10 +139,12 @@ const setCatalog = async (arr: Course[]) => {
   await jput("/api/catalog", arr);
 };
 const syncCatalog = async () => {
-  const srv = await jget<Course[]>("/api/catalog", DEFAULT_CATALOG);
+  // якщо вже є локальний каталог — не затираємо його дефолтом
+  const local = getCatalog();
+  const fallback = Array.isArray(local) && local.length ? local : DEFAULT_CATALOG;
+  const srv = await jget<Course[]>("/api/catalog", fallback);
   localStorage.setItem(CATALOG_KEY, JSON.stringify(srv));
 };
-
 const ensureCatalog = () => {
   try {
     const raw = localStorage.getItem(CATALOG_KEY);
@@ -112,6 +158,11 @@ type Purchase = { courseId: string; userId: string; status: "pending" | "approve
 const PURCHASES_KEY = "purchases";
 const getPurchases = (): Purchase[] => JSON.parse(localStorage.getItem(PURCHASES_KEY) || "[]");
 const setPurchasesLocal = (arr: Purchase[]) => localStorage.setItem(PURCHASES_KEY, JSON.stringify(arr));
+const addLocalPurchase = (courseId: string, userId: string) => {
+  const list = getPurchases();
+  list.push({ courseId, userId, status: "pending", ts: Date.now() });
+  setPurchasesLocal(list);
+};
 const syncPurchases = async () => {
   const srv = await jget<Purchase[]>("/api/purchases", getPurchases());
   setPurchasesLocal(srv);
@@ -162,17 +213,64 @@ const syncMaterialsForCourses = async (courseIds: string[]) => {
   setMaterials(all);
 };
 
+// ====== UPLOADS (with offline fallback) ======
 const uploadReceiptsBase64 = async (
   userId: string,
   courseId: string,
   namedDataUrls: { name: string; dataUrl: string }[],
   meta?: { txid?: string; comment?: string }
-) => await jpost(`/api/receipts/${userId}/${courseId}/base64`, { files: namedDataUrls, meta });
+) => {
+  if (USE_API && API_BASE) {
+    await jpost(`/api/receipts/${userId}/${courseId}/base64`, { files: namedDataUrls, meta });
+    return;
+  }
+  // OFFLINE: кладемо у localStorage
+  const all = getReceipts();
+  const byUser = all[userId] || {};
+  const current = byUser[courseId] || [];
+  const now = Date.now();
+  namedDataUrls.forEach((f, i) => {
+    current.push({
+      id: `loc_${now}_${i}`,
+      name: f.name || `receipt_${now}_${i}.png`,
+      url: f.dataUrl,
+      ts: now + i,
+      courseId
+    });
+  });
+  byUser[courseId] = current;
+  all[userId] = byUser;
+  setReceipts(all);
+};
 
-const uploadCourseFilesBase64 = async (courseId: string, namedDataUrls: { name: string; dataUrl: string }[]) =>
-  await jpost(`/api/materials/${courseId}/base64`, { files: namedDataUrls });
+const uploadCourseFilesBase64 = async (courseId: string, namedDataUrls: { name: string; dataUrl: string }[]) => {
+  if (USE_API && API_BASE) {
+    await jpost(`/api/materials/${courseId}/base64`, { files: namedDataUrls });
+    return;
+  }
+  // OFFLINE: додаємо у materials локально
+  const all = getMaterials();
+  if (!all[courseId]) all[courseId] = { text: "", files: [] };
+  const now = Date.now();
+  namedDataUrls.forEach((f, i) => {
+    const ext = (f.name || "").toLowerCase();
+    const type: MaterialFile["type"] =
+      ext.endsWith(".mp4") || ext.endsWith(".mov") ? "video" :
+      ext.endsWith(".pdf") ? "file" :
+      "image";
+    all[courseId].files.push({
+      id: `loc_${now}_${i}`,
+      name: f.name || `file_${now}_${i}`,
+      url: f.dataUrl,
+      ts: now + i,
+      type
+    });
+  });
+  setMaterials(all);
+};
 
-const CHAT_KEY = "chats";               
+// ====== CHAT / USERS / AUTH ======
+const CHAT_KEY = "chats";
 type ChatMsg = { from: "user" | "admin"; text: string; ts: number };
 
 const loadChats = (): Record<string, any> => JSON.parse(localStorage.getItem(CHAT_KEY) || "{}");
@@ -186,31 +284,34 @@ const normalizeThread = (v: any): ChatMsg[] => {
   return Object.values(v).filter(isMsg);
 };
 
+// !!! РОЗВЕДЕНІ СЕСІЇ
 const getUsers = () => JSON.parse(localStorage.getItem("users") || "[]");
 const setUsers = (arr: any[]) => localStorage.setItem("users", JSON.stringify(arr));
-const getCurrentUserId = () => localStorage.getItem("auth_user_id");
+
+// повертає user id для юзер-роутів, а на адмін-роутах — "admin"
+const getCurrentUserId = () => {
+  const hash = location.hash || "";
+  const onAdmin = hash.startsWith("#/admin");
+  if (onAdmin) return "admin";
+  return localStorage.getItem(USER_ID_KEY);
+};
 
 const makeId = () => "u_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
+// тільки юзер-прив’язка (адмін не чіпається)
 const ensureAuthBinding = async () => {
-  const hash = location.hash || "";
-  const onAdmin = hash.startsWith("#/admin");
-  const role = localStorage.getItem("role");
+  const emailRaw =
+    (localStorage.getItem(USER_EMAIL_KEY) || localStorage.getItem("auth_email") || "")
+      .toLowerCase()
+      .trim();
 
-  if (onAdmin && role === "admin") {
-    localStorage.setItem("auth_user_id", "admin");
-    return;
-  }
-
-  const email = (localStorage.getItem("auth_email") || "").toLowerCase().trim();
-  if (!email) {
-    if (localStorage.getItem("auth_user_id") === "admin") localStorage.removeItem("auth_user_id");
-    return;
-  }
+  if (!emailRaw) return;
 
   try {
-    const u = (await jpost("/api/users/ensure", { email })) as any;
+    const u = (await jpost("/api/users/ensure", { email: emailRaw })) as any;
     if (u?.id) {
+      localStorage.setItem(USER_ID_KEY, u.id);
+      // для сумісності зі старим кодом
       localStorage.setItem("auth_user_id", u.id);
       const list = getUsers();
       if (!list.find((x: any) => x.id === u.id)) { list.push(u); setUsers(list); }
@@ -219,12 +320,14 @@ const ensureAuthBinding = async () => {
   } catch {}
 
   let users = getUsers();
-  let u = users.find((x: any) => (x.email || x.mail || "").toLowerCase() === email);
+  let u = users.find((x: any) => (x.email || x.mail || "").toLowerCase() === emailRaw);
   if (!u) {
-    u = { id: makeId(), email, firstName: "", lastName: "" };
+    u = { id: makeId(), email: emailRaw, firstName: "", lastName: "" };
     users.push(u);
     setUsers(users);
   }
+  localStorage.setItem(USER_ID_KEY, u.id);
+  // сумісність
   localStorage.setItem("auth_user_id", u.id);
 };
 
@@ -232,8 +335,7 @@ const ADMIN_ACCOUNTS_KEY = "admin_accounts";
 type AdminAccount = { email: string; password: string };
 
 const getAdminAccounts = (): AdminAccount[] => JSON.parse(localStorage.getItem(ADMIN_ACCOUNTS_KEY) || "[]");
-const setAdminAccounts = (arr: AdminAccount[]) =>
-  localStorage.setItem(ADMIN_ACCOUNTS_KEY, JSON.stringify(arr));
+const setAdminAccounts = (arr: AdminAccount[]) => localStorage.setItem(ADMIN_ACCOUNTS_KEY, JSON.stringify(arr));
 if (!localStorage.getItem(ADMIN_ACCOUNTS_KEY)) {
   setAdminAccounts([{ email: "admin@nmt.school", password: "admin123" }]);
 }
@@ -242,6 +344,7 @@ const adminAuth = (email: string, password: string) =>
     (a) => a.email.toLowerCase() === email.toLowerCase() && a.password === password
   );
 
+// ====== VIEW HOOKS ======
 document.addEventListener("view:mounted", (e: Event) => {
   const detail = (e as CustomEvent<string>).detail;
 
@@ -250,7 +353,7 @@ document.addEventListener("view:mounted", (e: Event) => {
   const mobileMenu = document.getElementById("mobileMenu");
   if (burger && mobileMenu) {
     const setOpen = (flag: boolean) => {
-      burger.classList.toggle("burger-open", flag);
+      (burger as HTMLElement).classList.toggle("burger-open", flag);
       mobileMenu.setAttribute("data-open", flag ? "true" : "false");
     };
     setOpen(false);
@@ -259,6 +362,7 @@ document.addEventListener("view:mounted", (e: Event) => {
     mobileMenu.querySelectorAll("a").forEach((a) => a.addEventListener("click", () => setOpen(false)));
   }
 
+  // ====== Login (USER) ======
   if (detail === "/login") {
     const form = document.getElementById("loginForm") as HTMLFormElement | null;
     form?.addEventListener("submit", async (ev) => {
@@ -266,16 +370,19 @@ document.addEventListener("view:mounted", (e: Event) => {
       const fd = new FormData(form);
       const email = String(fd.get("email") || "").toLowerCase().trim();
       await Auth.login(email, String(fd.get("password")));
-      localStorage.setItem("role", "user");
-      localStorage.setItem("auth_email", email);
-      localStorage.removeItem("auth_token");
-      localStorage.removeItem("admin_email");
-      localStorage.removeItem("auth_user_id");
+
+      // ВАЖЛИВО: не чіпаємо адмінські ключі
+      localStorage.setItem("role", "user"); // для сумісності з роутером
+      localStorage.setItem(USER_EMAIL_KEY, email);
+      localStorage.setItem("auth_email", email); // legacy
+
+      // не чіпаємо admin_token / admin_email / auth_token
       await ensureAuthBinding();
       location.hash = "/app";
     });
   }
 
+  // ====== Register ======
   if (detail === "/register") {
     const form = document.getElementById("regForm") as HTMLFormElement | null;
     form?.addEventListener("submit", async (ev) => {
@@ -287,6 +394,7 @@ document.addEventListener("view:mounted", (e: Event) => {
     });
   }
 
+  // ====== Admin login (ADMIN) ======
   if (detail === "/admin-login") {
     const form = document.getElementById("adminLoginForm") as HTMLFormElement | null;
     form?.addEventListener("submit", (ev) => {
@@ -296,15 +404,18 @@ document.addEventListener("view:mounted", (e: Event) => {
       const password = String(fd.get("password") || "");
       if (!adminAuth(email, password)) return alert("Невірний email або пароль адміністратора.");
 
-      localStorage.setItem("auth_token", `admin:${Date.now()}`);
-      localStorage.setItem("role", "admin");
-      localStorage.setItem("admin_email", email);
-      localStorage.removeItem("auth_email");
-      localStorage.setItem("auth_user_id", "admin");
+      // ВАЖЛИВО: не чіпаємо юзерські ключі
+      localStorage.setItem(ADMIN_TOKEN_KEY, `admin:${Date.now()}`);
+      localStorage.setItem("auth_token", localStorage.getItem(ADMIN_TOKEN_KEY)!); // legacy
+      localStorage.setItem("role", "admin"); // для сумісності з роутером
+      localStorage.setItem(ADMIN_EMAIL_KEY, email);
+      // НЕ видаляємо user_email / user_id / auth_email
+
       location.hash = "/admin";
     });
   }
 
+  // ====== Dashboard (USER AREA) ======
   if (detail === "/app") {
     ensureCatalog();
     ensureAuthBinding();
@@ -314,10 +425,10 @@ document.addEventListener("view:mounted", (e: Event) => {
 
     const views: Record<string, (u?: any) => string> = {
       courses: () => {
-        const cat = getCatalog();
-        if (!cat.length) return `<article class="card">Каталог порожній.</article>`;
+        const catalogList = getCatalog();
+        if (!catalogList.length) return `<article class="card">Каталог порожній.</article>`;
         return (
-          cat
+          catalogList
             .map(
               (c) => `
           <article class="card grid gap-4" data-reveal>
@@ -354,8 +465,8 @@ document.addEventListener("view:mounted", (e: Event) => {
       my: () => {
         const uid = getCurrentUserId()!;
         const enroll = getEnrollments()[uid] || [];
-        const cat = getCatalog();
-        const mine = cat.filter((c) => enroll.includes(c.id));
+        const catalogAll = getCatalog();
+        const mine = catalogAll.filter((c) => enroll.includes(c.id));
         const pending = getPurchases().filter((p) => p.userId === uid && p.status === "pending");
 
         const materialsHTML = (courseId: string) => {
@@ -366,19 +477,19 @@ document.addEventListener("view:mounted", (e: Event) => {
             .map((f) => {
               if (f.type === "image") {
                 return `
-                  <a href="${f.url}" target="_blank" class="block border rounded-xl overflow-hidden">
-                    <img src="${f.url}" alt="${f.name}" style="max-width:100%;height:auto;object-fit:contain;background:#faf7f2;display:block;">
+                  <a href="${absUrl(f.url)}" target="_blank" class="block border rounded-xl overflow-hidden">
+                    <img src="${absUrl(f.url)}" alt="${f.name}" style="max-width:100%;height:auto;object-fit:contain;background:#faf7f2;display:block;">
                   </a>
                   <div class="muted text-xs break-all">${f.name}</div>`;
               }
               if (f.type === "video") {
                 return `
                   <video controls style="width:100%;max-height:260px;background:#000;border-radius:12px;display:block">
-                    <source src="${f.url}">
+                    <source src="${absUrl(f.url)}">
                   </video>
                   <div class="muted text-xs break-all">${f.name}</div>`;
               }
-              return `<a class="btn-outline" href="${f.url}" download="${f.name}" style="width:100%;text-align:center">Завантажити ${f.name}</a>`;
+              return `<a class="btn-outline" href="${absUrl(f.url)}" download="${f.name}" style="width:100%;text-align:center">Завантажити ${f.name}</a>`;
             })
             .join("<div class='h-2'></div>");
 
@@ -416,7 +527,7 @@ document.addEventListener("view:mounted", (e: Event) => {
               <h3 class="text-lg font-semibold">Заявки</h3>
               ${pending
                 .map((p) => {
-                  const c = cat.find((x) => x.id === p.courseId)!;
+                  const c = catalogAll.find((x) => x.id === p.courseId)!;
                   return `<div class="muted">"${c.title}" — <b>очікує підтвердження</b></div>`;
                 })
                 .join("")}
@@ -453,7 +564,7 @@ document.addEventListener("view:mounted", (e: Event) => {
         const id = getCurrentUserId() || "—";
         const lastName  = u ? rd(u, ["lastName", "surname"], "") : "";
         const firstName = u ? rd(u, ["firstName", "name"], "") : "";
-        const fallbackEmail = (localStorage.getItem("auth_email") || "").trim();
+        const fallbackEmail = (localStorage.getItem(USER_EMAIL_KEY) || localStorage.getItem("auth_email") || "").trim();
         const email = u ? rd(u, ["email", "mail"], fallbackEmail) : fallbackEmail;
 
         return `
@@ -485,7 +596,9 @@ document.addEventListener("view:mounted", (e: Event) => {
       return (sessionStorage.getItem("cabinet_tab") as any) || "courses";
     };
 
-    const contentEl = document.getElementById("dashContent")!;
+    const contentEl = document.getElementById("dashContent") as HTMLElement | null;
+    if (!contentEl) return; // захист від рідкісного стану DOM
+
     const links = Array.from(document.querySelectorAll<HTMLAnchorElement>(".tab-link"));
 
     const setActive = (name: "courses" | "my" | "support" | "profile") => {
@@ -522,9 +635,11 @@ document.addEventListener("view:mounted", (e: Event) => {
 
       contentEl.querySelector("#logoutBtn")?.addEventListener("click", () => {
         sessionStorage.removeItem("cabinet_tab");
-        localStorage.setItem("role", "user");
-        localStorage.removeItem("auth_user_id");
-        localStorage.removeItem("auth_email");
+        // вихід тільки з юзер-сесії, адміна не чіпаємо
+        localStorage.removeItem(USER_ID_KEY);
+        localStorage.removeItem(USER_EMAIL_KEY);
+        localStorage.removeItem("auth_user_id"); // legacy
+        localStorage.removeItem("auth_email");    // legacy
         Auth.logout();
         location.hash = "/login";
       });
@@ -545,7 +660,8 @@ document.addEventListener("view:mounted", (e: Event) => {
         if (i >= 0) {
           list[i] = { ...list[i], firstName, lastName, email };
           setUsers(list);
-          localStorage.setItem("auth_email", email);
+          localStorage.setItem(USER_EMAIL_KEY, email);
+          localStorage.setItem("auth_email", email); // legacy
           await jpatch(`/api/users/${uid}`, { firstName, lastName, email });
           await ensureAuthBinding();
           alert("Збережено.");
@@ -622,11 +738,21 @@ document.addEventListener("view:mounted", (e: Event) => {
     })();
   }
 
+  // ====== PAY (USER) ======
   if (detail === "/app/pay") {
     ensureCatalog();
     ensureAuthBinding();
+
     const courseId = localStorage.getItem("selected_course") || getCatalog()[0]?.id;
     const course = getCatalog().find((c) => c.id === courseId) || getCatalog()[0];
+
+    const uidMaybe = getCurrentUserId();
+    if (!uidMaybe) {
+      alert("Сесія недійсна. Увійдіть знову.");
+      location.hash = "/login";
+      return;
+    }
+    const uid = uidMaybe;
 
     const titleEl = document.getElementById("payCourseTitle");
     if (titleEl && course) titleEl.textContent = course.title;
@@ -644,6 +770,23 @@ document.addEventListener("view:mounted", (e: Event) => {
     const txidEl    = document.getElementById("receiptTxid") as HTMLInputElement | null;
     const commentEl = document.getElementById("receiptComment") as HTMLTextAreaElement | null;
 
+    // керування станом кнопки «Надіслати»
+    const submitBtn = form?.querySelector<HTMLButtonElement>('button[type="submit"]') || null;
+    let uploading = false;
+    let totalToRead = 0;
+    let readSoFar = 0;
+
+    const hasSelected = () =>
+      ((camInput?.files?.length || 0) + (fileInput?.files?.length || 0)) > 0;
+
+    const setSubmitState = () => {
+      if (!submitBtn) return;
+      const disabled = uploading || !hasSelected();
+      submitBtn.disabled = disabled;
+      submitBtn.classList.toggle('opacity-50', disabled);
+      submitBtn.textContent = uploading ? `Завантаження… ${readSoFar}/${totalToRead}` : 'Надіслати';
+    };
+
     btnPhoto?.addEventListener("click", () => camInput?.click());
     btnPick?.addEventListener("click",  () => fileInput?.click());
 
@@ -655,22 +798,23 @@ document.addEventListener("view:mounted", (e: Event) => {
       chosen.innerHTML = files.length
         ? files.map(f => `• <span class="break-all">${f.name}</span> <span class="muted text-xs">(${Math.round(f.size/1024)} кБ)</span>`).join("<br/>")
         : `<span class="muted">Файли не вибрано.</span>`;
+      setSubmitState();
     };
     camInput?.addEventListener("change", showChosen);
     fileInput?.addEventListener("change", showChosen);
+    setSubmitState();
 
-    const uid = getCurrentUserId()!;
     const renderReceipts = async () => {
-      const recs = await fetchReceiptsToLocal(uid, course.id);
+      const recs = USE_API ? await fetchReceiptsToLocal(uid, course.id) : (getReceipts()[uid]?.[course.id] || []);
       listBox.innerHTML = recs.length
-        ? recs.map((r) => `
+        ? recs.map((r: Receipt) => `
             <div class="border rounded-xl p-2 flex flex-col sm:flex-row sm:items-center gap-2 w-full">
               <div class="text-sm flex-1 min-w-0">
                 <div class="font-medium break-all">${r.name}</div>
                 <div class="muted text-xs">${new Date(r.ts).toLocaleString()}</div>
               </div>
               <div class="flex gap-2 w-full sm:w-auto">
-                <a class="btn-outline" style="flex:1" href="${API_BASE}${r.url}" target="_blank">Відкрити</a>
+                <a class="btn-outline" style="flex:1" href="${absUrl(r.url)}" target="_blank">Відкрити</a>
                 <button class="btn-outline" style="flex:1" data-del-receipt-id="${r.id || ""}">Видалити</button>
               </div>
             </div>
@@ -681,7 +825,14 @@ document.addEventListener("view:mounted", (e: Event) => {
         btn.addEventListener("click", async () => {
           const id = btn.getAttribute("data-del-receipt-id")!;
           if (!id) return;
-          await jdel(`/api/receipts/${uid}/${course.id}/${id}`);
+          if (USE_API) {
+            await jdel(`/api/receipts/${uid}/${course.id}/${id}`);
+          } else {
+            const all = getReceipts();
+            const arr = (all[uid]?.[course.id] || []).filter((x: any) => x.id !== id);
+            (all[uid] ||= {})[course.id] = arr;
+            setReceipts(all);
+          }
           await renderReceipts();
         });
       });
@@ -690,13 +841,14 @@ document.addEventListener("view:mounted", (e: Event) => {
 
     const readAsDataURL = (file: File) => new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onload  = () => { readSoFar++; setSubmitState(); resolve(String(reader.result || "")); };
       reader.onerror = () => reject(reader.error);
       reader.readAsDataURL(file);
     });
 
     form?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
+      if (uploading) return;
 
       const files: File[] = [
         ...(camInput?.files ? Array.from(camInput.files) : []),
@@ -710,7 +862,14 @@ document.addEventListener("view:mounted", (e: Event) => {
       }
 
       try {
-        const urls = await Promise.all(files.map(readAsDataURL));
+        uploading = true;
+        totalToRead = files.length;
+        readSoFar = 0;
+        setSubmitState();
+        status.textContent = "Завантаження файлів…";
+
+        const urls: string[] = [];
+        for (const f of files) urls.push(await readAsDataURL(f));
 
         await uploadReceiptsBase64(
           uid,
@@ -719,6 +878,8 @@ document.addEventListener("view:mounted", (e: Event) => {
           { txid: txidEl?.value || "", comment: commentEl?.value || "" }
         );
 
+        // заявка локально + (за наявності бекенда — POST теж піде)
+        addLocalPurchase(course.id, uid);
         await jpost("/api/purchases", { courseId: course.id, userId: uid });
 
         status.textContent = "Чек(и) завантажено. Статус: очікує підтвердження адміністратором.";
@@ -728,7 +889,6 @@ document.addEventListener("view:mounted", (e: Event) => {
         if (commentEl) commentEl.value = "";
         showChosen();
         await renderReceipts();
-
         await syncPurchases();
 
         alert("Дякуємо! Заявку з чеком передано на перевірку.");
@@ -736,10 +896,16 @@ document.addEventListener("view:mounted", (e: Event) => {
       } catch (e) {
         console.error(e);
         alert("Не вдалося завантажити файл(и). Спробуйте інший формат або менший розмір.");
+      } finally {
+        uploading = false;
+        totalToRead = 0;
+        readSoFar = 0;
+        setSubmitState();
       }
     });
   }
 
+  // ====== ADMIN ======
   if (detail === "/admin") {
     const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>("#admTabs [data-adm-tab]"));
     const sections: Record<string, HTMLElement> = {
@@ -834,9 +1000,9 @@ document.addEventListener("view:mounted", (e: Event) => {
 
     const renderCourses = () => {
       ensureCatalog();
-      const cat = getCatalog();
-      courseList.innerHTML = cat.length
-        ? cat
+      const catalogAdmin = getCatalog();
+      courseList.innerHTML = catalogAdmin.length
+        ? catalogAdmin
             .map((c) => {
               ensureCourseMaterials(c.id);
               const mats = getMaterials()[c.id];
@@ -849,7 +1015,7 @@ document.addEventListener("view:mounted", (e: Event) => {
                         <div class="muted text-xs">${new Date(f.ts).toLocaleString()}</div>
                       </div>
                       <div class="flex gap-2 w-full sm:w-auto">
-                        <a class="btn-outline" style="flex:1" href="${API_BASE}${f.url}" target="_blank">Відкрити</a>
+                        <a class="btn-outline" style="flex:1" href="${absUrl(f.url)}" target="_blank">Відкрити</a>
                         <button class="btn-outline" style="flex:1" data-del-file-id="${c.id}:${f.id || ""}">Прибрати</button>
                       </div>
                     </div>`
@@ -937,7 +1103,7 @@ document.addEventListener("view:mounted", (e: Event) => {
         });
       });
 
-      cat.forEach((c) => {
+      catalogAdmin.forEach((c) => {
         const inp = courseList.querySelector<HTMLInputElement>(`#matFile_${c.id}`);
         if (!inp) return;
         inp.onchange = async () => {
@@ -947,7 +1113,7 @@ document.addEventListener("view:mounted", (e: Event) => {
             const r = new FileReader(); r.onload = () => resolve(String(r.result || "")); r.onerror = () => reject(r.error); r.readAsDataURL(f);
           })));
           await uploadCourseFilesBase64(c.id, files.map((f,i)=>({ name: f.name, dataUrl: urls[i] })));
-          const m = await jget<CourseMaterials>(`/api/materials/${c.id}`, { text: "", files: [] });
+          const m = await jget<CourseMaterials>(`/api/materials/${c.id}`, getMaterials()[c.id] || { text: "", files: [] });
           const all = getMaterials(); all[c.id] = m; setMaterials(all);
           renderCourses();
         };
@@ -957,9 +1123,11 @@ document.addEventListener("view:mounted", (e: Event) => {
         btn.addEventListener("click", async () => {
           const raw = btn.getAttribute("data-del-file-id")!; // courseId:fileId
           const [cid, fileId] = raw.split(":");
-          if (fileId) await jdel(`/api/materials/${cid}/file/${fileId}`);
-          const m = await jget<CourseMaterials>(`/api/materials/${cid}`, { text: "", files: [] });
-          const all = getMaterials(); all[cid] = m; setMaterials(all);
+          if (USE_API && fileId) await jdel(`/api/materials/${cid}/file/${fileId}`);
+          // локально також прибираємо
+          const mats = getMaterials();
+          mats[cid].files = (mats[cid].files || []).filter(f => (f.id || "") !== fileId);
+          setMaterials(mats);
           renderCourses();
         });
       });
@@ -976,12 +1144,26 @@ document.addEventListener("view:mounted", (e: Event) => {
 
     (async () => { await syncCatalog(); renderCourses(); })();
 
+    // ====== Requests ======
     const reqList = document.getElementById("reqList")!;
     const renderRequests = async () => {
       await syncPurchases();
       const reqs = getPurchases().sort((a, b) => b.ts - a.ts);
-      const cat = getCatalog();
+      const catalogAdmin2 = getCatalog();
       const ulist = getUsers();
+
+      if (USE_API) {
+        await Promise.all(
+          reqs.map(async (r) => {
+            try {
+              const arr = await jget<Receipt[]>(`/api/receipts/${r.userId}/${r.courseId}`, []);
+              const all = getReceipts();
+              (all[r.userId] ||= {})[r.courseId] = arr;
+              setReceipts(all);
+            } catch {}
+          })
+        );
+      }
 
       if (!reqs.length) {
         reqList.innerHTML = `<div class="muted">Немає заявок.</div>`;
@@ -992,30 +1174,30 @@ document.addEventListener("view:mounted", (e: Event) => {
         .map((r) => {
           const user = ulist.find((u: any) => u.id === r.userId);
           const uname = user ? [user.surname || user.lastName, user.name || user.firstName].filter(Boolean).join(" ") : r.userId;
-          const course = cat.find((c) => c.id === r.courseId);
+          const course = catalogAdmin2.find((c) => c.id === r.courseId);
           const cname = course ? course.title : r.courseId;
 
           const recs = (getReceipts()[r.userId]?.[r.courseId] || []) as any[];
           const hasReceipt = recs.length > 0;
 
           const receiptsPreview = (uid: string, courseId: string) => {
-            const arr = (getReceipts()[uid]?.[courseId] || []) as Array<{name:string; url:string; ts:number}>;
+            const arr = (getReceipts()[uid]?.[courseId] || []) as Array<{ name: string; url: string; ts: number }>;
             if (!arr.length) return `<div class="muted text-sm">Немає файлів</div>`;
             return `
               <div class="grid gap-2">
                 ${arr
                   .map((f) => {
-                    const isPdf = /\.pdf(\?|$)/i.test(f.name) || f.url.includes("/uploads/");
+                    const isPdf = /\.pdf(\?|$)/i.test(f.name) || (!f.url.startsWith("data:") && f.url.includes("/uploads/"));
                     return isPdf
                       ? `<div class="flex flex-col sm:flex-row sm:items-center gap-2 border rounded-xl p-2">
                           <div class="text-sm flex-1 min-w-0">
                             <div class="font-medium break-all">${f.name}</div>
                             <div class="muted text-xs">${new Date(f.ts).toLocaleString()}</div>
                           </div>
-                          <a class="btn-outline" style="flex:1" href="${API_BASE}${f.url}" target="_blank">Відкрити</a>
+                          <a class="btn-outline" style="flex:1" href="${absUrl(f.url)}" target="_blank">Відкрити</a>
                         </div>`
-                      : `<a href="${API_BASE}${f.url}" target="_blank" class="block border rounded-xl overflow-hidden">
-                           <img src="${API_BASE}${f.url}" alt="${f.name}" style="max-width:100%;height:auto;object-fit:contain;background:#faf7f2;display:block">
+                      : `<a href="${absUrl(f.url)}" target="_blank" class="block border rounded-xl overflow-hidden">
+                           <img src="${absUrl(f.url)}" alt="${f.name}" style="max-width:100%;height:auto;object-fit:contain;background:#faf7f2;display:block">
                          </a>
                          <div class="muted text-xs break-all">${f.name} • ${new Date(f.ts).toLocaleString()}</div>`;
                   })
@@ -1072,7 +1254,6 @@ document.addEventListener("view:mounted", (e: Event) => {
         });
       });
 
-      
       reqList.querySelectorAll<HTMLButtonElement>("[data-reject]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const r = JSON.parse(btn.getAttribute("data-reject")!) as Purchase;
@@ -1085,7 +1266,6 @@ document.addEventListener("view:mounted", (e: Event) => {
         });
       });
 
-      // remove
       reqList.querySelectorAll<HTMLButtonElement>("[data-remove]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const r = JSON.parse(btn.getAttribute("data-remove")!) as Purchase;
@@ -1100,7 +1280,7 @@ document.addEventListener("view:mounted", (e: Event) => {
     };
     renderRequests();
 
-    // ====== доступи ======
+    // ====== Access ======
     const userSelect = document.getElementById("userSelect") as HTMLSelectElement;
     const accessList = document.getElementById("accessList")!;
     const saveAccessBtn = document.getElementById("saveAccessBtn")!;
@@ -1117,13 +1297,27 @@ document.addEventListener("view:mounted", (e: Event) => {
           .join("")
       : `<option value="" disabled>Немає користувачів</option>`;
 
-    const renderAccess = () => {
+    const renderAccess = async () => {
       const uid = userSelect.value;
-      const cat = getCatalog();
+      const catalogAll2 = getCatalog();
+
+      if (USE_API) {
+        await Promise.all(
+          catalogAll2.map(async (c) => {
+            try {
+              const arr = await jget<Receipt[]>(`/api/receipts/${uid}/${c.id}`, []);
+              const all = getReceipts();
+              (all[uid] ||= {})[c.id] = arr;
+              setReceipts(all);
+            } catch {}
+          })
+        );
+      }
+
       const enr = getEnrollments()[uid] || [];
       const recs = getReceipts()[uid] || {};
 
-      const boxes = cat
+      const boxes = catalogAll2
         .map(
           (c) => `
         <label class="flex items-center gap-2">
@@ -1136,7 +1330,7 @@ document.addEventListener("view:mounted", (e: Event) => {
       const filesHtml = Object.keys(recs).length
         ? Object.entries(recs)
             .map(([cid, arr]) => {
-              const course = cat.find((c) => c.id === cid);
+              const course = catalogAll2.find((c) => c.id === cid);
               const cname = course ? course.title : cid;
               const items = (arr || [])
                 .map(
@@ -1146,7 +1340,7 @@ document.addEventListener("view:mounted", (e: Event) => {
                     <div class="font-medium break-all">${r.name}</div>
                     <div class="muted text-xs">${new Date(r.ts).toLocaleString()}</div>
                   </div>
-                  <a class="btn-outline" style="flex:1" href="${API_BASE}${r.url}" target="_blank">Відкрити</a>
+                  <a class="btn-outline" style="flex:1" href="${absUrl(r.url)}" target="_blank">Відкрити</a>
                 </div>`
                 )
                 .join("");
