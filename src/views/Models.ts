@@ -67,8 +67,7 @@ export default function Models(): string {
           </li>
         </ul>
         <p class="muted mt-3 text-sm">
-          Примітка: сторінки типу <code>/f/…</code> (папки/збірки) GeoGebra не вбудовуються у фрейм.
-          Тому всі матеріали відкриваються в окремій вкладці — так стабільніше і без помилок 404.
+          
         </p>
       </article>
     </section>
