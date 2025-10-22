@@ -63,3 +63,19 @@
 }
 .tab-link { border-left: 3px solid transparent; }
 .tab-link.is-active { background: rgba(96, 64, 48, .08); border-left-color: #6d4b3b; font-weight: 600; }
+@layer utilities {
+  /* Вузька картка-ілюстрація: значно менша за контейнер */
+  .card-narrow {
+    width: min(100%, 680px);   /* ~в 2–3 рази менше */
+    margin-inline: auto;       /* центруємо */
+  }
+
+  /* За потреби ще компактніше на великих екранах */
+  @media (min-width: 1280px) {
+    .card-narrow { width: min(100%, 400px); }
+  }
+}
+@layer utilities {
+  .chip { @apply inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm border bg-white/70 hover:bg-white text-brown-700; }
+  .chip.active { @apply bg-brown-600 text-white shadow; }
+}

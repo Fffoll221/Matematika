@@ -423,6 +423,9 @@ document.addEventListener("view:mounted", (e: Event) => {
     const rd = (u: any, keys: string[], fallback = "") =>
       keys.reduce((v, k) => (v ?? u?.[k]), undefined) ?? fallback;
 
+    // cleanup для таймерів на вкладках кабінету
+    let cleanupCurrent: (() => void) | null = null;
+
     const views: Record<string, (u?: any) => string> = {
       courses: () => {
         const catalogList = getCatalog();
@@ -602,6 +605,9 @@ document.addEventListener("view:mounted", (e: Event) => {
     const links = Array.from(document.querySelectorAll<HTMLAnchorElement>(".tab-link"));
 
     const setActive = (name: "courses" | "my" | "support" | "profile") => {
+      // чистимо попередні ватчери вкладки
+      if (cleanupCurrent) { try { cleanupCurrent(); } catch {} cleanupCurrent = null; }
+
       links.forEach((a) => {
         const on = a.getAttribute("data-tab") === name;
         a.classList.toggle("is-active", on);
@@ -712,6 +718,54 @@ document.addEventListener("view:mounted", (e: Event) => {
           input.value = "";
           render();
         });
+
+        // === live-оновлення чату без перезавантаження ===
+        const uidLive = getCurrentUserId()!;
+        let lastSig = JSON.stringify(normalizeThread(loadChats()[uidLive] || []));
+        const tick = () => {
+          const cur = JSON.stringify(normalizeThread(loadChats()[uidLive] || []));
+          if (cur !== lastSig) { lastSig = cur; render(); }
+        };
+        const onStorage = (e: StorageEvent) => { if (e.key === CHAT_KEY) tick(); };
+        window.addEventListener("storage", onStorage);
+        const intId = window.setInterval(tick, 1000);
+        cleanupCurrent = () => { clearInterval(intId); window.removeEventListener("storage", onStorage); };
+      }
+
+      if (name === "my") {
+        // === авто-синхронізація доступів і текстових матеріалів, щоб з’являлись одразу ===
+        if (USE_API && API_BASE) {
+          const uid = getCurrentUserId()!;
+          let lastEnroll = JSON.stringify(getEnrollments()[uid] || []);
+          let lastTextSig = JSON.stringify((getEnrollments()[uid] || []).map(cid => (getMaterials()[cid]?.text || "")));
+
+          const tickMy = async () => {
+            await syncEnrollments();
+            const enr = getEnrollments()[uid] || [];
+            const enrStr = JSON.stringify(enr);
+
+            if (enrStr !== lastEnroll) {
+              lastEnroll = enrStr;
+              await syncMaterialsForCourses(enr);
+              // перерендер тільки якщо ми все ще на вкладці "my"
+              if ((sessionStorage.getItem("cabinet_tab") as any) === "my") contentEl.innerHTML = views.my();
+              lastTextSig = JSON.stringify(enr.map(cid => (getMaterials()[cid]?.text || "")));
+              return;
+            }
+
+            if (enr.length) {
+              const before = lastTextSig;
+              await syncMaterialsForCourses(enr);
+              lastTextSig = JSON.stringify(enr.map(cid => (getMaterials()[cid]?.text || "")));
+              if (lastTextSig !== before && (sessionStorage.getItem("cabinet_tab") as any) === "my") {
+                contentEl.innerHTML = views.my();
+              }
+            }
+          };
+
+          const intIdMy = window.setInterval(tickMy, 4000);
+          cleanupCurrent = () => { clearInterval(intIdMy); };
+        }
       }
     };
 
@@ -929,26 +983,35 @@ document.addEventListener("view:mounted", (e: Event) => {
 
     let activeId: string | null = null;
     const users = getUsers();
-    const chats = loadChats();
-    const ids = Object.keys(chats);
 
-    usersBox.innerHTML = ids.length
-      ? ids
-          .map((id) => {
-            const u = users.find((x: any) => x.id === id);
-            const name = u
-              ? [u.surname || u.lastName, u.name || u.firstName].filter(Boolean).join(" ")
-              : id;
-            const last = normalizeThread(chats[id])?.slice(-1)[0];
-            const sub = last ? new Date(last.ts).toLocaleString() : "";
-            return `
+    const renderUsersList = () => {
+      const chats = loadChats();
+      const ids = Object.keys(chats);
+      usersBox.innerHTML = ids.length
+        ? ids
+            .map((id) => {
+              const u = users.find((x: any) => x.id === id);
+              const name = u
+                ? [u.surname || u.lastName, u.name || u.firstName].filter(Boolean).join(" ")
+                : id;
+              const last = normalizeThread(chats[id])?.slice(-1)[0];
+              const sub = last ? new Date(last.ts).toLocaleString() : "";
+              return `
             <button class="w-full text-left px-4 py-3 border-b hover:bg-beige-100" data-open="${id}">
               <div class="font-medium break-all">${name || id}</div>
               <div class="muted text-xs">${sub}</div>
             </button>`;
-          })
-          .join("")
-      : `<div class="p-4 muted">Поки що немає жодного чату.</div>`;
+            })
+            .join("")
+        : `<div class="p-4 muted">Поки що немає жодного чату.</div>`;
+
+      usersBox.querySelectorAll<HTMLButtonElement>("[data-open]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          activeId = btn.getAttribute("data-open");
+          if (activeId) renderThread(activeId);
+        });
+      });
+    };
 
     const renderThread = (id: string) => {
       const thread = normalizeThread(loadChats()[id]);
@@ -973,12 +1036,7 @@ document.addEventListener("view:mounted", (e: Event) => {
       header.textContent = `Чат з: ${title || id}`;
     };
 
-    usersBox.querySelectorAll<HTMLButtonElement>("[data-open]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        activeId = btn.getAttribute("data-open");
-        renderThread(activeId!);
-      });
-    });
+    renderUsersList();
 
     form?.addEventListener("submit", (ev) => {
       ev.preventDefault();
@@ -992,6 +1050,7 @@ document.addEventListener("view:mounted", (e: Event) => {
       saveChats(updated);
       input!.value = "";
       renderThread(activeId);
+      renderUsersList();
     });
 
     // ====== курси (CRUD + матеріали) ======
@@ -1375,6 +1434,21 @@ document.addEventListener("view:mounted", (e: Event) => {
       await jput(`/api/enrollments/${uid}`, { courses: selected });
       alert("Доступи оновлено.");
     });
+
+    // === live-оновлення адмін-чату (список та активний тред) ===
+    let lastDump = localStorage.getItem(CHAT_KEY) || "{}";
+    const tickAdmin = () => {
+      const cur = localStorage.getItem(CHAT_KEY) || "{}";
+      if (cur !== lastDump) {
+        lastDump = cur;
+        renderUsersList();
+        if (activeId) renderThread(activeId);
+      }
+    };
+    const onStorageAdm = (e: StorageEvent) => { if (e.key === CHAT_KEY) tickAdmin(); };
+    window.addEventListener("storage", onStorageAdm);
+void window.setInterval(tickAdmin, 1000);
+    // при зміні вкладок адмінки інтервал не заважає — лишаємо простим
   }
 
   // reveal анімації

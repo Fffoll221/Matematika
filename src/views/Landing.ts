@@ -283,16 +283,16 @@ const teacherFallback = `
     </section>
 
     <!-- ============ ПЕРЕВАГИ КУРСУ ============ -->
-    <section class="container-soft pt-8">
-      <h2 class="text-2xl md:text-3xl font-bold mb-4" data-reveal>Переваги курсу</h2>
-       <div class="card p-0 overflow-hidden mb-6" data-reveal>
-    <img
-      src="/kadr1.png"
-      alt="Математичні формули"
-      class="block w-full h-auto"
-      loading="lazy"
-    />
-  </div>
+<figure class="card card-narrow p-0 overflow-hidden mb-6" data-reveal>
+  <img
+    src="/kadr1.png"
+    alt="Математичні формули — переваги курсу"
+    class="block w-full h-auto"
+    loading="lazy"
+    decoding="async"
+  />
+</figure>
+
       <div class="grid md:grid-cols-4 gap-6">
         ${perks
           .map(
